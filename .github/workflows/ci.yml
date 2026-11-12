@@ -351,6 +351,9 @@ jobs:
           - bin: sz_activemq_combined_consumer
             backend: both
             args: "WITH_POSTGRES=1 WITH_MSSQL=1"
+          - bin: sz_servicebus_combined_consumer
+            backend: both
+            args: "WITH_POSTGRES=1 WITH_MSSQL=1"
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

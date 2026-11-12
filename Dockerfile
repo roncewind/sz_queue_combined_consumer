@@ -51,10 +51,10 @@ ENV LD_LIBRARY_PATH=/opt/senzing/er/lib
 WORKDIR /app
 
 # Which workspace binary to build: sz_rabbit_combined_consumer (RabbitMQ, default),
-# sz_sqs_combined_consumer (Amazon SQS) or sz_activemq_combined_consumer (Apache
-# ActiveMQ Artemis, AMQP 1.0). `cargo build -p ${BIN}` compiles only that bin +
-# its deps, so each image pulls only its own broker client (lapin / AWS SDK /
-# fe2o3-amqp).
+# sz_sqs_combined_consumer (Amazon SQS), sz_activemq_combined_consumer (Apache
+# ActiveMQ Artemis, AMQP 1.0) or sz_servicebus_combined_consumer (Azure Service
+# Bus, AMQP 1.0). `cargo build -p ${BIN}` compiles only that bin + its deps, so
+# each image pulls only its own broker client (lapin / AWS SDK / fe2o3-amqp).
 ARG BIN=sz_rabbit_combined_consumer
 
 # Build the selected binary from the workspace. (The single-crate dummy-src
@@ -258,7 +258,7 @@ LABEL org.opencontainers.image.title="${BIN}" \
 COPY nsswitch.conf /etc/nsswitch.conf
 
 # Fixed install path so the exec-form ENTRYPOINT need not interpolate ${BIN}
-# (which it cannot). The image tag distinguishes the RabbitMQ vs SQS backend.
+# (which it cannot). The image tag distinguishes the backend (BIN).
 COPY --from=builder /app/target/release/${BIN} /usr/local/bin/sz-consumer
 
 ENTRYPOINT ["/usr/local/bin/sz-consumer"]

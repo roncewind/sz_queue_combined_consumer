@@ -171,13 +171,15 @@ already provides for libSz.
 ## Backend binaries (`BIN`) and the CI Docker matrix
 
 `--build-arg BIN=` selects the workspace binary: `sz_rabbit_combined_consumer`
-(default), `sz_sqs_combined_consumer` or `sz_activemq_combined_consumer`.
-`cargo build -p ${BIN}` compiles only that binary's broker client (lapin /
-AWS SDK / fe2o3-amqp). All three are pure-Rust with rustls, so the runtime
-manifest above is identical for every `BIN`; only the DB-driver closure
-(`WITH_POSTGRES` / `WITH_MSSQL`) changes the image. CI therefore builds the
-postgres / mssql / both variants for RabbitMQ and SQS, and only the default
-`both` closure for ActiveMQ.
+(default), `sz_sqs_combined_consumer`, `sz_activemq_combined_consumer` or
+`sz_servicebus_combined_consumer`. `cargo build -p ${BIN}` compiles only that
+binary's broker client (lapin / AWS SDK / fe2o3-amqp; the Service Bus binary
+adds the CBS + management clients and HMAC-SHA256 for SAS tokens, all pure
+Rust). All four are pure-Rust with rustls (webpki roots compiled in), so the
+runtime manifest above is identical for every `BIN`; only the DB-driver
+closure (`WITH_POSTGRES` / `WITH_MSSQL`) changes the image. CI therefore
+builds the postgres / mssql / both variants for RabbitMQ and SQS, and only the
+default `both` closure for ActiveMQ and Service Bus.
 
 ## SQL Server (MSSQL) — partially verified, BLOCKED locally
 
