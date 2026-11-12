@@ -4,6 +4,30 @@ Sections headed `0.5.0 — …` ship in tag `v0.5.0` (2026-10-16); sections head
 
 ## Unreleased
 
+* **New backend: Azure Service Bus — `sz_servicebus_combined_consumer`**
+  (`crates/servicebus`, `BIN=sz_servicebus_combined_consumer`). Same shared
+  core (worker pool, redo share, stats, file mode, pure redoer) and the same
+  receive / link-credit / settle shape as the ActiveMQ binary, over
+  `fe2o3-amqp` (the `[patch]`ed fork) plus its CBS and management clients
+  (patched to the same fork rev so their types unify). Drop-in env names of
+  the Python Service Bus consumer: `SENZING_AZURE_QUEUE_CONNECTION_STRING`
+  (SAS rule + key; optional `EntityPath`; `UseDevelopmentEmulator=true`) and
+  `SENZING_AZURE_QUEUE_NAME`. Auth = TLS on 5671, SASL ANONYMOUS, CBS
+  `put-token` of a locally signed SAS token (1 h, re-put every 30 min).
+  Peek-lock receiver (`rcv-settle-mode` second); success = `accepted`;
+  rejects = `rejected` + `com.microsoft:dead-letter` with `DeadLetterReason` /
+  `DeadLetterErrorDescription` (lands in `<queue>/$DeadLetterQueue`);
+  shutdown = `released`. New: peek-lock renewal (`com.microsoft:renew-lock` on
+  `<queue>/$management`) for deliveries unsettled past
+  `SENZING_SB_LOCK_RENEW_SECS` (default 120 s, or half the remaining lock); a
+  lost lock is logged, never fatal. `SENZING_SB_RECONNECT_TIMEOUT` mirrors
+  ActiveMQ's startup retry. Settles are asynchronous with link credit, so
+  throughput is not capped by a serial per-message settle round trip. No queue
+  depth (v1). 26 unit tests; e2e suite `servicebus_e2e` (load + both body
+  types, dead-letter properties, lock renewal on a 10 s lock, shutdown
+  release) against the Service Bus emulator, run locally (not in CI). CI
+  builds the image (`both` DB closure). No core changes.
+
 * **ActiveMQ: retry an unreachable broker at startup.** New `--reconnect-timeout`
   / `SENZING_ACTIVEMQ_RECONNECT_TIMEOUT` (default 300 s, `0` = forever): the
   startup connect retries transient errors every 5 s (30 s per attempt) instead

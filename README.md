@@ -29,6 +29,7 @@ client (compile-time backend selection — no runtime switch, no feature flags):
 | `sz_rabbit_combined_consumer` | bin | RabbitMQ | `lapin` |
 | `sz_sqs_combined_consumer` | bin | Amazon SQS (standard queues) | `aws-sdk-sqs` |
 | `sz_activemq_combined_consumer` | bin | Apache ActiveMQ Artemis (AMQP 1.0, anycast queues) | `fe2o3-amqp` (rustls) |
+| `sz_servicebus_combined_consumer` | bin | Azure Service Bus (AMQP 1.0 queues, SAS via CBS, peek-lock with lock renewal) | `fe2o3-amqp` (rustls) + `fe2o3-amqp-cbs` / `-management` |
 | `sz_activemq_publisher` | bin | Artemis **publisher**: JSONL files -> the queue the ActiveMQ consumer reads (no Senzing) | `fe2o3-amqp` (rustls), `flate2`, `bzip2` |
 | `sz-activemq-amqp` | lib | — (Artemis URL/credentials, connection, anycast terminus, record body encode/decode; shared by the ActiveMQ consumer + publisher) | `fe2o3-amqp` |
 | `sz-record-transform` | lib | — (record-transform plugin C ABI + Rust export macro) | none |
@@ -45,7 +46,10 @@ redoer (`--redo-percent 100`). The SQS binary takes `--queue-url` /
 come from the standard AWS provider chain. See [SQS specifics](#sqs-specifics).
 The ActiveMQ binary takes `--url` / `SENZING_ACTIVEMQ_URL` and `--queue` /
 `SENZING_ACTIVEMQ_QUEUE` and compiles neither `lapin` nor the AWS SDK; see
-[ActiveMQ Artemis specifics](#activemq-artemis-specifics).
+[ActiveMQ Artemis specifics](#activemq-artemis-specifics). The Service Bus
+binary takes `SENZING_AZURE_QUEUE_CONNECTION_STRING` and
+`SENZING_AZURE_QUEUE_NAME` (the env names of the Python Service Bus consumer);
+see [Service Bus specifics](#service-bus-specifics).
 
 > NOTE: the repository was renamed from `sz_rabbit_combined_consumer` to
 > `sz_queue_combined_consumer` for the multi-backend scope; the binaries keep
@@ -123,7 +127,11 @@ verbatim-compatible with the sibling drivers.
 | `SENZING_ACTIVEMQ_USER` / `SENZING_ACTIVEMQ_PASSWORD` (`--user` / `--password`) | from URL | ActiveMQ binary only: SASL PLAIN credentials; each overrides the URL's. None at all = anonymous. |
 | `SENZING_ACTIVEMQ_QUEUE` (`-q`/`--queue`) | required iff redo% < 100 | ActiveMQ binary only: ANYCAST queue name, or an FQQN `address::queue` |
 | `SENZING_ACTIVEMQ_RECONNECT_TIMEOUT` (`--reconnect-timeout`) | 300 | ActiveMQ binary only: seconds to keep retrying an unreachable broker at **startup** (every 5 s, 30 s per attempt); `0` = never give up. Bad credentials / URL still fail at once. |
-| `SENZING_MQ_RECHECK_SECONDS` (`--mq-recheck-secs`) | 30 | every binary, queue mode: diagnostic MQ depth probe cadence (RabbitMQ: passive declare; SQS: `ApproximateNumberOfMessages`; ActiveMQ: no AMQP depth verb, depth reported unknown) and the `MQ drained (depth 0)` / `MQ active (depth N)` transition log. Not a correctness poll. |
+| `SENZING_AZURE_QUEUE_CONNECTION_STRING` (`--connection-string`) | required iff redo% < 100 | Service Bus binary only: `Endpoint=sb://<ns>.servicebus.windows.net/;SharedAccessKeyName=<rule>;SharedAccessKey=<key>`, optional `EntityPath=<queue>`; `UseDevelopmentEmulator=true` = the local emulator (plain AMQP, 5672). The rule needs **Listen**. Never logged. |
+| `SENZING_AZURE_QUEUE_NAME` (`-q`/`--queue`) | `EntityPath` | Service Bus binary only: source queue; required iff redo% < 100 unless the connection string has `EntityPath` (both set and different = startup error) |
+| `SENZING_SB_LOCK_RENEW_SECS` (`--lock-renew-secs`) | 120 | Service Bus binary only: renew the peek-lock of a delivery still unsettled this long after it was received (and again every this long); sooner when the broker's lock expires earlier (half its remaining time). ≥ 1; keep it below the queue's lockDuration. |
+| `SENZING_SB_RECONNECT_TIMEOUT` (`--reconnect-timeout`) | 300 | Service Bus binary only: seconds to keep retrying an unreachable namespace at **startup** (every 5 s, 30 s per attempt); `0` = never give up. A rejected token, an unknown queue or a bad connection string fail at once. |
+| `SENZING_MQ_RECHECK_SECONDS` (`--mq-recheck-secs`) | 30 | every binary, queue mode: diagnostic MQ depth probe cadence (RabbitMQ: passive declare; SQS: `ApproximateNumberOfMessages`; ActiveMQ / Service Bus: no AMQP depth verb, depth reported unknown) and the `MQ drained (depth 0)` / `MQ active (depth N)` transition log. Not a correctness poll. |
 | `SENZING_REDO_SLEEP_TIME_IN_SECONDS` (`--redo-sleep-secs`) | 60 | fetcher pause on empty redo queue (auto-shortened to 2 s while redo is still in flight, for cascade drain) |
 | `SENZING_REDO_STATS_INTERVAL` (`--redo-stats-interval`) | 1000 | log a redo throughput line (`Stats: N redo records processed, R/sec`) every this many processed redo records; ≥ 1 |
 | `LONG_RECORD` (`--long-record`) | 300 | long-record threshold, seconds; stats cadence = LONG_RECORD/2 |
@@ -136,7 +144,9 @@ initialized, in all three binaries: redo% ∉ [0,100]; redo% < 100 without URL/q
 (queue mode; SQS: `--queue-url`); 0 < redo% < 100 with fewer than 2 threads
 (queue and file mode); `LONG_RECORD` < 1; SQS `--wait-time` ∉ 0..=20,
 `--max-messages` ∉ 1..=10, `--visibility-timeout` ∉ 0..=43200; ActiveMQ URL
-not `amqp://` / `amqps://` with a host, or a password without a user. Exit codes:
+not `amqp://` / `amqps://` with a host, or a password without a user; a
+malformed Service Bus connection string, a queue / `EntityPath` mismatch or
+`--lock-renew-secs` 0. Exit codes:
 **1** = configuration/validation failure at startup, **255** = fatal runtime
 error (engine/DB/broker/INFO sink, including a sink close stuck past 5 s)
 after an orderly teardown, **3** = file mode stopped at the redo drain cap
@@ -256,6 +266,83 @@ driver uses this one convention for all three binaries.)
   the drained/active transition log does not fire.
 * **ActiveMQ Classic.** Classic (5.x) also implements AMQP 1.0, but only
   Artemis is tested (e2e against `apache/artemis:2.57.0`).
+
+## Service Bus specifics
+
+* **Connection and auth.** `amqps://<namespace>:5671` (TLS first, rustls with
+  the webpki roots; no AMQP TLS-upgrade header), SASL **ANONYMOUS**, then a
+  claims-based-security (CBS) `put-token` on `$cbs`: type
+  `servicebus.windows.net:sastoken`, name (audience)
+  `sb://<namespace>/<queue>`, body a SAS token signed locally from the
+  connection string's rule + key (HMAC-SHA256 over
+  `quote_plus(audience) + "\n" + expiry`, the Azure SDK algorithm). Tokens
+  live 1 h and are re-put on the same connection every 30 min (a failed
+  refresh is retried every 30 s; if the token ever lapses Service Bus
+  detaches the link, which is fatal: exit 255). The key and the token are
+  never logged. `UseDevelopmentEmulator=true` switches to plain AMQP on 5672
+  for the Service Bus emulator. Managed identity (Entra JWT) is not
+  implemented; the token source is one enum (`conn_str::Auth`) so it can be
+  added without touching the transport.
+* **Peek-lock.** The receiver link uses `snd-settle-mode = unsettled`,
+  `rcv-settle-mode = second` (the Azure SDK's PEEK_LOCK), manual link credit
+  kept at `--prefetch` − unsettled exactly as on ActiveMQ (default threads +
+  2). Credit is the lock clock: a message is locked when Service Bus sends it,
+  so prefetch only as much as the workers drain promptly.
+* **Settle.** Success = `accepted` (complete: the message is deleted). Reject
+  (engine bad input, `SENZ0010` retry timeout, `SENZ0082`, unparseable or
+  undecodable body) = **`rejected` with error condition
+  `com.microsoft:dead-letter`** and error info `DeadLetterReason` /
+  `DeadLetterErrorDescription` (the Azure SDK's dead-letter disposition):
+  Service Bus moves the message verbatim to `<queue>/$DeadLetterQueue` with
+  those two application properties set. `DeadLetterReason` is
+  `MalformedRecord` or `SenzingRejected`; `DeadLetterErrorDescription` is the
+  `REJECTING:` reason (engine error text or `malformed record: …`), capped at
+  1 KiB.
+* **Lock renewal.** Service Bus peek-locks expire (lockDuration, max 5 min;
+  an expired lock redelivers the message and bumps its DeliveryCount). A
+  control task renews every delivery still unsettled after
+  `SENZING_SB_LOCK_RENEW_SECS` (default 120 s) — or after half of its
+  remaining lock (from `x-opt-locked-until`, then from each renewal's new
+  expiry), whichever is sooner — and again on the same schedule: request
+  `com.microsoft:renew-lock` on `<queue>/$management`, body
+  `{"lock-tokens": [uuid]}` (the delivery tag, a .NET-order GUID, sent as an
+  AMQP uuid), `associated-link-name` = the receiver link, one token per request
+  so one lost lock cannot fail the others. Each renewal is logged
+  (`renewed the lock on delivery N (lock token …, renewal k, locked for another
+  Ns)`). A lost lock (`statusCode` 410, or 5 failed attempts) is logged and
+  **never fatal**: Service Bus redelivers the message and `add_record` is
+  idempotent; the eventual settle of that delivery is ignored by the broker
+  (logged). A broken management link is re-attached on the next renew tick
+  (1 s). Long records are therefore only logged, never dead-lettered (SQS /
+  ActiveMQ parity).
+* **Shutdown / release.** At shutdown (SIGINT / SIGTERM / SIGHUP, same 10 s
+  grace) link credit drops to 0 and every unsettled delivery is `released`:
+  the lock is dropped and the message is immediately redeliverable. Verified
+  on the Service Bus emulator: `released` leaves **DeliveryCount unchanged**
+  (an SDK `abandon_message`, i.e. `modified` delivery-failed, and a lock
+  expiry each add one; MaxDeliveryCount dead-letters on that count). Not
+  verified against a cloud namespace — if it counts releases there, every
+  rolling restart costs the in-flight messages one delivery attempt (size
+  MaxDeliveryCount accordingly). Unlike Artemis, deliveries left unsettled at
+  a connection drop stay locked until lock expiry (DeliveryCount + 1) before
+  they are redelivered.
+* **Receive errors / reconnect.** As ActiveMQ: per-message decode errors are
+  dead-lettered as malformed; any other receive error (connection, session or
+  link gone, 60 s idle timeout, token lapse) is **fatal**: orderly shutdown,
+  final totals, exit 255. The startup connect retries transient failures
+  (refused / reset / timed out) every 5 s for up to `--reconnect-timeout`
+  (default 300 s); a rejected token or an unknown queue fails at once (exit
+  255).
+* **Bodies.** An AMQP `Data` section (what the Azure SDKs send for a
+  `ServiceBusMessage`; several are concatenated) or an `AmqpValue`
+  string/binary is the record JSON; anything else is dead-lettered as
+  malformed.
+* **Depth.** Service Bus exposes no queue depth over AMQP (only via its ATOM
+  management API), so v1 reports none, like ActiveMQ.
+* **Tested** against the Service Bus emulator
+  (`mcr.microsoft.com/azure-messaging/servicebus-emulator` + `azure-sql-edge`,
+  queues from `crates/servicebus/tests/fixtures/emulator-config.json`); see
+  *Running the e2e tests locally*. The emulator does not validate SAS keys.
 
 ### Loading the queue: `sz_activemq_publisher`
 
@@ -480,13 +567,16 @@ sz_rabbit_combined_consumer --file /work/in/p0/records.json \
 ## Failure handling
 
 * **Poison MQ record** (bad JSON / missing DATA_SOURCE/RECORD_ID / non-UTF-8 /
-  undecodable AMQP message (ActiveMQ) / engine BadInput / SENZ0082 /
-  long-record give-up — the last RabbitMQ only; SQS extends visibility and
-  ActiveMQ only logs instead) → dead-letter (RabbitMQ: `basic_reject`, no
-  requeue — AMQP 0-9-1 cannot carry the reason; SQS: `SendMessage` to the DLQ
-  with `SzReason`, then delete; ActiveMQ: the `rejected` outcome with the
-  reason in its error description, routed by Artemis to the dead-letter
-  address), keep running. Identical on every transport:
+  undecodable AMQP message (ActiveMQ / Service Bus) / engine BadInput /
+  SENZ0082 / long-record give-up — the last RabbitMQ only; SQS extends
+  visibility, Service Bus renews the lock and ActiveMQ only logs instead) →
+  dead-letter (RabbitMQ: `basic_reject`, no requeue — AMQP 0-9-1 cannot carry
+  the reason; SQS: `SendMessage` to the DLQ with `SzReason`, then delete;
+  ActiveMQ: the `rejected` outcome with the reason in its error description,
+  routed by Artemis to the dead-letter address; Service Bus: `rejected` with
+  `com.microsoft:dead-letter` and `DeadLetterReason` /
+  `DeadLetterErrorDescription`, moved to `<queue>/$DeadLetterQueue`), keep
+  running. Identical on every transport:
   * every dead-lettered record prints ONE stdout marker
     `REJECTING: DATA_SOURCE : RECORD_ID -> <reason>` (an unparseable body has
     no DS/ID: `REJECTING:  :  -> malformed record: <parse error>`); an engine
@@ -517,15 +607,16 @@ sz_rabbit_combined_consumer --file /work/in/p0/records.json \
   record. Deliveries stay unacked / un-deleted / unsettled so the broker
   redelivers them once the process is restarted.
 * **Fatal errors** (Database, NotInitialized, License, …; SQS also 30
-  consecutive `ReceiveMessage` failures; ActiveMQ also a lost broker link) →
+  consecutive `ReceiveMessage` failures; ActiveMQ and Service Bus also a lost
+  broker link) →
   orderly teardown, non-zero exit.
   Graceful shutdown (SIGINT, SIGTERM, or SIGHUP) drains
   in-flight work within a 10 s grace; whatever is still unsettled then is
   **released for redelivery on every transport, never dead-lettered or counted
   as rejected** — queued-but-unstarted deliveries and those still inside a
   worker alike (RabbitMQ: left unacked, requeued when the connection closes;
-  SQS: left un-deleted, redelivered after the visibility timeout; ActiveMQ:
-  `released`, immediately redeliverable). Each one
+  SQS: left un-deleted, redelivered after the visibility timeout; ActiveMQ
+  and Service Bus: `released`, immediately redeliverable). Each one
   still inside a worker is printed as `Still processing (… min): DS : ID`.
   **`nohup` is honored:** if SIGHUP is already ignored when the process starts
   (as `nohup` sets it), it stays ignored in every mode (queue, file, pure
@@ -645,6 +736,7 @@ cargo build --release --workspace                       # everything
 cargo build --release -p sz_rabbit_combined_consumer    # RabbitMQ bin only (no AWS SDK)
 cargo build --release -p sz_sqs_combined_consumer       # SQS bin only (no lapin)
 cargo build --release -p sz_activemq_combined_consumer  # ActiveMQ Artemis bin only (no lapin, no AWS SDK)
+cargo build --release -p sz_servicebus_combined_consumer # Azure Service Bus bin only (no lapin, no AWS SDK)
 cargo build --release -p sz_activemq_publisher          # Artemis publisher (no Senzing, no libSz needed)
 cargo test  --workspace --lib --bins                    # unit tests (no infra)
 
@@ -652,6 +744,7 @@ cargo test  --workspace --lib --bins                    # unit tests (no infra)
 docker build --build-arg BIN=sz_rabbit_combined_consumer -t brian/sz_rabbit_combined_consumer .        # both DB backends
 docker build --build-arg BIN=sz_sqs_combined_consumer    -t brian/sz_sqs_combined_consumer .
 docker build --build-arg BIN=sz_activemq_combined_consumer -t brian/sz_activemq_combined_consumer .
+docker build --build-arg BIN=sz_servicebus_combined_consumer -t brian/sz_servicebus_combined_consumer .
 docker build --build-arg BIN=sz_rabbit_combined_consumer --build-arg WITH_MSSQL=0 -t brian/sz_rabbit_combined_consumer:pg .
 # The image is a Senzing-runtime image for ONE driver bin; sz_activemq_publisher
 # is not imaged (it needs no Senzing) — ship the release binary instead.
@@ -741,6 +834,7 @@ sz_rabbit_combined_consumer --file /data/records.jsonl.rejected.jsonl \
 | SQS e2e | `cargo test -p sz_sqs_combined_consumer --test sqs_e2e -- --nocapture --test-threads=1` | ElasticMQ + engine |
 | ActiveMQ publisher e2e | `cargo test -p sz_activemq_publisher --test publisher_e2e -- --nocapture --test-threads=1` | Artemis (AMQP + Jolokia); no engine |
 | ActiveMQ e2e | `cargo test -p sz_activemq_combined_consumer --test activemq_e2e -- --nocapture --test-threads=1` | Artemis (AMQP + Jolokia) + engine; run after the publisher suite (its round-trip test runs `target/debug/sz_activemq_publisher`) |
+| Service Bus e2e | `cargo test -p sz_servicebus_combined_consumer --test servicebus_e2e -- --nocapture --test-threads=1` | Service Bus emulator (started with `crates/servicebus/tests/fixtures/emulator-config.json`) + engine with the `TEST` data source; not in CI (the emulator needs a SQL Edge sidecar). `IT_SB_EMULATOR_CONNECTION_STRING` must contain `UseDevelopmentEmulator=true` (the suite refuses a real namespace) |
 | INFO sink + drain cap e2e | `cargo test -p sz_rabbit_combined_consumer --test info_sink_e2e -- --nocapture --test-threads=1` | engine only (creates its own throwaway SQLite repository from `PIPELINE` in `SENZING_ENGINE_CONFIGURATION_JSON`; copies `templates/G2C.db.template`, or the file named by `SZ_E2E_SQLITE_TEMPLATE` on Linux packages that ship only the schema DDL); the queue-mode cases also need `SENZING_AMQP_URL` |
 
 `.github/workflows/ci.yml` runs fmt + clippy, the release build + unit tests,
@@ -811,6 +905,22 @@ and register the data sources `CUSTOMERS REFERENCE WATCHLIST TEST SEARCH`
 the `integration` job's init step. Then run the three e2e commands above.
 Queues are created by the tests (unique names per test); Artemis's default
 `DLQ` address receives the ActiveMQ dead-lettered records.
+
+Service Bus (emulator; it cannot create queues at runtime, so it is started
+with the suite's queue config and the suite purges them before each test):
+
+```console
+docker network create sb-e2e
+docker run -d --name sb-e2e-sql --network sb-e2e --network-alias sqledge \
+  -e ACCEPT_EULA=Y -e 'MSSQL_SA_PASSWORD=<StrongPassw0rd!>' mcr.microsoft.com/azure-sql-edge:latest
+docker run -d --name sb-e2e-emulator --network sb-e2e -p 5682:5672 \
+  -v "$PWD/crates/servicebus/tests/fixtures/emulator-config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro" \
+  -e SQL_SERVER=sqledge -e 'MSSQL_SA_PASSWORD=<StrongPassw0rd!>' -e ACCEPT_EULA=Y \
+  mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+# wait for "Emulator Service is Successfully Up!" in its log, then:
+export IT_SB_EMULATOR_CONNECTION_STRING='Endpoint=sb://localhost:5682;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;'
+cargo test -p sz_servicebus_combined_consumer --test servicebus_e2e -- --nocapture --test-threads=1
+```
 
 ## License
 
