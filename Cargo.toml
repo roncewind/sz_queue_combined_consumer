@@ -11,6 +11,7 @@ members = [
     "crates/activemq-amqp",
     "crates/activemq",
     "crates/activemq-publisher",
+    "crates/servicebus",
     "crates/transform-abi",
     "crates/transform-example",
     "crates/info-sink-abi",
@@ -65,6 +66,16 @@ percent-encoding = "2"
 # libbz2-rs-sys backend (pure Rust, no C libbz2). Both MIT/Apache-2.0.
 flate2 = "1"
 bzip2 = "0.6"
+# Azure Service Bus backend (crates/servicebus only): CBS (claims-based security)
+# put-token and AMQP management request/response clients over fe2o3-amqp
+# ([patch]ed to the same fork rev as fe2o3-amqp, below), plus
+# the SAS token signature (HMAC-SHA256, base64). hmac/sha2/base64 are the
+# versions already in the tree.
+fe2o3-amqp-cbs = "0.18"
+fe2o3-amqp-management = "0.18"
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
 
 # sz-combined-consumer-core: the broker-agnostic engine-processing library shared
 # by every backend binary (RabbitMQ, SQS, ...).
@@ -89,3 +100,8 @@ strip = true
 # frames made the next delivery-id skip and Artemis closed the link. Drop this once upstream ships it.
 [patch.crates-io]
 fe2o3-amqp = { git = "https://github.com/brianmacy/fe2o3-amqp.git", rev = "73de8988ae2420bc2d600beacd44b57d33844399" }
+# The CBS + management clients (Service Bus backend) come from the SAME fork rev:
+# the crates.io builds depend on crates.io fe2o3-amqp-types, whose types would not
+# unify with the fork's (the fork's fe2o3-amqp uses its in-repo types crate).
+fe2o3-amqp-cbs = { git = "https://github.com/brianmacy/fe2o3-amqp.git", rev = "73de8988ae2420bc2d600beacd44b57d33844399" }
+fe2o3-amqp-management = { git = "https://github.com/brianmacy/fe2o3-amqp.git", rev = "73de8988ae2420bc2d600beacd44b57d33844399" }

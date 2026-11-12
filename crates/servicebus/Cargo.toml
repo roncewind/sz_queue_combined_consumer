@@ -1,0 +1,45 @@
+[package]
+name = "sz_servicebus_combined_consumer"
+description = "Senzing combined load + redo driver, Azure Service Bus backend (AMQP 1.0 queues, CBS/SAS auth, peek-lock with lock renewal; one redo% knob). Shares the engine-processing core with the RabbitMQ, SQS and ActiveMQ drivers."
+version.workspace = true
+publish = false  # not published to crates.io
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "sz_servicebus_combined_consumer"
+path = "src/main.rs"
+
+[dependencies]
+sz-combined-consumer-core.workspace = true
+# Record body decode (Data sections / AmqpValue string), shared with the
+# ActiveMQ consumer. No Senzing, no broker-specific behavior.
+sz-activemq-amqp.workspace = true
+sz-rust-sdk.workspace = true
+tokio.workspace = true
+# AMQP 1.0 client (rustls) + the CBS put-token and management request/response
+# clients built on it. NO lapin / AWS SDK here.
+fe2o3-amqp.workspace = true
+fe2o3-amqp-cbs.workspace = true
+fe2o3-amqp-management.workspace = true
+# SAS token: HMAC-SHA256 + base64 + URL encoding (all already in the tree).
+hmac.workspace = true
+sha2.workspace = true
+base64.workspace = true
+percent-encoding.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# tests/servicebus_e2e.rs: signals via kill(2) (no `kill` executable in the
+# senzingsdk-runtime container), and the example record-transform cdylib
+# (SLEEP_MS holds a worker) for the lock-renewal and shutdown cases.
+libc.workspace = true
+sz-record-transform-example = { path = "../transform-example" }
+# Encodes the renew-lock body in a unit test to check the wire bytes. The fork's
+# own serde_amqp (same rev as the [patch]ed fe2o3-amqp), so the Value type is
+# the one fe2o3-amqp uses.
+serde_amqp = { git = "https://github.com/brianmacy/fe2o3-amqp.git", rev = "73de8988ae2420bc2d600beacd44b57d33844399" }
