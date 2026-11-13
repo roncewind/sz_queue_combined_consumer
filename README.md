@@ -318,12 +318,11 @@ driver uses this one convention for all three binaries.)
 * **Shutdown / release.** At shutdown (SIGINT / SIGTERM / SIGHUP, same 10 s
   grace) link credit drops to 0 and every unsettled delivery is `released`:
   the lock is dropped and the message is immediately redeliverable. Verified
-  on the Service Bus emulator: `released` leaves **DeliveryCount unchanged**
-  (an SDK `abandon_message`, i.e. `modified` delivery-failed, and a lock
-  expiry each add one; MaxDeliveryCount dead-letters on that count). Not
-  verified against a cloud namespace — if it counts releases there, every
-  rolling restart costs the in-flight messages one delivery attempt (size
-  MaxDeliveryCount accordingly). Unlike Artemis, deliveries left unsettled at
+  on the Service Bus emulator AND a real Azure Premium namespace: `released`
+  leaves **DeliveryCount unchanged** (an SDK `abandon_message`, i.e.
+  `modified` delivery-failed, and a lock expiry each add one;
+  MaxDeliveryCount dead-letters on that count), so a rolling restart does not
+  spend the in-flight messages' delivery attempts. Unlike Artemis, deliveries left unsettled at
   a connection drop stay locked until lock expiry (DeliveryCount + 1) before
   they are redelivered.
 * **Receive errors / reconnect.** As ActiveMQ: per-message decode errors are
@@ -343,6 +342,15 @@ driver uses this one convention for all three binaries.)
   (`mcr.microsoft.com/azure-messaging/servicebus-emulator` + `azure-sql-edge`,
   queues from `crates/servicebus/tests/fixtures/emulator-config.json`); see
   *Running the e2e tests locally*. The emulator does not validate SAS keys.
+  The same e2e suite also passes against a **real Azure Service Bus Premium
+  namespace** (opt-in: `IT_SB_ALLOW_REAL_NAMESPACE=1` +
+  `IT_SB_REAL_CONNECTION_STRING`, a Send+Listen rule on a throwaway namespace
+  whose `sz-it-*` queues mirror the fixture; the tests purge them): real SAS/CBS
+  auth, dead-letter reason, lock renewal on a 10 s lock, release. One
+  unexplained transient seen once in 8 renewal runs on a freshly created SAS
+  rule: the broker closed the connection with `UnauthorizedAccess` ("LocalAuth
+  credentials are no longer valid") ~30 s in, which is FATAL (exit 255; the
+  container restarts and the unsettled messages redeliver).
 
 ### Loading the queue: `sz_activemq_publisher`
 
@@ -834,7 +842,7 @@ sz_rabbit_combined_consumer --file /data/records.jsonl.rejected.jsonl \
 | SQS e2e | `cargo test -p sz_sqs_combined_consumer --test sqs_e2e -- --nocapture --test-threads=1` | ElasticMQ + engine |
 | ActiveMQ publisher e2e | `cargo test -p sz_activemq_publisher --test publisher_e2e -- --nocapture --test-threads=1` | Artemis (AMQP + Jolokia); no engine |
 | ActiveMQ e2e | `cargo test -p sz_activemq_combined_consumer --test activemq_e2e -- --nocapture --test-threads=1` | Artemis (AMQP + Jolokia) + engine; run after the publisher suite (its round-trip test runs `target/debug/sz_activemq_publisher`) |
-| Service Bus e2e | `cargo test -p sz_servicebus_combined_consumer --test servicebus_e2e -- --nocapture --test-threads=1` | Service Bus emulator (started with `crates/servicebus/tests/fixtures/emulator-config.json`) + engine with the `TEST` data source; not in CI (the emulator needs a SQL Edge sidecar). `IT_SB_EMULATOR_CONNECTION_STRING` must contain `UseDevelopmentEmulator=true` (the suite refuses a real namespace) |
+| Service Bus e2e | `cargo test -p sz_servicebus_combined_consumer --test servicebus_e2e -- --nocapture --test-threads=1` | Service Bus emulator (started with `crates/servicebus/tests/fixtures/emulator-config.json`) + engine with the `TEST` data source; not in CI (the emulator needs a SQL Edge sidecar). `IT_SB_EMULATOR_CONNECTION_STRING` must contain `UseDevelopmentEmulator=true` (the suite refuses a real namespace unless `IT_SB_ALLOW_REAL_NAMESPACE=1` + `IT_SB_REAL_CONNECTION_STRING` are set — throwaway namespace only, the tests purge the `sz-it-*` queues) |
 | INFO sink + drain cap e2e | `cargo test -p sz_rabbit_combined_consumer --test info_sink_e2e -- --nocapture --test-threads=1` | engine only (creates its own throwaway SQLite repository from `PIPELINE` in `SENZING_ENGINE_CONFIGURATION_JSON`; copies `templates/G2C.db.template`, or the file named by `SZ_E2E_SQLITE_TEMPLATE` on Linux packages that ship only the schema DDL); the queue-mode cases also need `SENZING_AMQP_URL` |
 
 `.github/workflows/ci.yml` runs fmt + clippy, the release build + unit tests,

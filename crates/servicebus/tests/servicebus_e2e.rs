@@ -67,7 +67,28 @@ fn env_nonempty(key: &str) -> Option<String> {
 }
 
 /// The emulator connection string when the rig is configured, else `None`.
+///
+/// Opt-in real-namespace smoke run: `IT_SB_ALLOW_REAL_NAMESPACE=1` plus
+/// `IT_SB_REAL_CONNECTION_STRING` (a Send+Listen rule on a THROWAWAY namespace
+/// whose `sz-it-load` / `sz-it-renew` / `sz-it-release` queues were created with
+/// the properties in `tests/fixtures/emulator-config.json`; the tests purge them).
 fn gate() -> Option<String> {
+    if env_nonempty("IT_SB_ALLOW_REAL_NAMESPACE").as_deref() == Some("1") {
+        if env_nonempty("SENZING_ENGINE_CONFIGURATION_JSON").is_none() {
+            skip(format_args!(
+                "SKIP: SENZING_ENGINE_CONFIGURATION_JSON not set"
+            ));
+            return None;
+        }
+        let Some(cs) = env_nonempty("IT_SB_REAL_CONNECTION_STRING") else {
+            skip(format_args!(
+                "SKIP: IT_SB_ALLOW_REAL_NAMESPACE=1 but IT_SB_REAL_CONNECTION_STRING not set"
+            ));
+            return None;
+        };
+        eprintln!("NOTE: running against a REAL Service Bus namespace (opt-in)");
+        return Some(cs);
+    }
     for var in [
         "SENZING_ENGINE_CONFIGURATION_JSON",
         "IT_SB_EMULATOR_CONNECTION_STRING",
